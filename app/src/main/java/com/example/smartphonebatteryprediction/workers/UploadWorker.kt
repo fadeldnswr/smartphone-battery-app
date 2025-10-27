@@ -6,16 +6,28 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import androidx.work.*
-import com.example.smartphonebatteryprediction.data.remote.SupabaseClient
 import com.example.smartphonebatteryprediction.di.ServiceLocator
 import java.time.Instant
 import com.example.smartphonebatteryprediction.R
+import com.example.smartphonebatteryprediction.data.remote.SupabaseProvider
+import io.github.jan.supabase.postgrest.postgrest
+import java.time.Period
 
 class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         Log.i("UploadWorker", "doWork() started")
-        val url = inputData.getString(SUPABASE_API_URL) ?: applicationContext.getString(R.string.SUPABASE_API_URL)
-        val key = inputData.getString(SUPABASE_API_KEY) ?: applicationContext.getString(R.string.SUPABASE_API_KEY)
+        val supabase = SupabaseProvider.get(applicationContext)
+
+        val hasRadio = (applicationContext as Context).let {
+            val fine = androidx.core.content.ContextCompat.checkSelfPermission(
+                it, android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val nearby = if (android.os.Build.VERSION.SDK_INT >= 33)
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    it, android.Manifest.permission.NEARBY_WIFI_DEVICES
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED else false
+            fine || nearby
+        }
 
         // Define repository for metrics logger
         val repo = ServiceLocator.provideRepository(appContext = applicationContext)
@@ -32,7 +44,7 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
             "device_id":"$deviceId",
             "ts_utc":"$ts",
             "net_type":"${network.networkTypes}",
-            "rssi_dbm":${network.radioRssiDbm ?: "null"},
+            "channel_quality":${network.radioRssiDbm ?: "null"},
             "rx_total_bytes":${network.rxBytes},
             "tx_total_bytes":${network.txBytes},
             "batt_voltage_mv":${battery.voltageMv ?: "null"},
@@ -44,37 +56,47 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
         """.trimIndent()
 
         // Insert data to Supabase
-        val sendData = SupabaseClient(url, key).insertRawData(json)
+        val sendData = supabase.postgrest["raw_metrics"].insert(json)
         Log.i("UploadWorker", "POST raw_smartphone_data -> success=$sendData")
 
         // Create for 5 minutes interval
-        scheduleNext(applicationContext, url, key)
+        runOnceNow(applicationContext)
         Log.i("UploadWorker", "doWork() finished: success=$sendData")
-        return if (sendData) Result.success() else Result.retry()
+        return Result.success()
     }
 
     companion object {
-        private val SUPABASE_API_URL = "SUPABASE_API_URL"
-        private val SUPABASE_API_KEY = "SUPABASE_API_KEY"
+        private const val UNIQUE = "upload_periodic_unique"
+        private const val TAG = "upload_periodic"
 
-        // Define function to send data every 5 mins
-        fun scheduleForFiveMins(context: Context, url: String, key: String){
-            val request = OneTimeWorkRequestBuilder<UploadWorker>()
-                .setInitialDelay(1, TimeUnit.MINUTES)
+        // Run work manager to send data to Supabase
+        fun runOnceNow(context: Context){
+            val once = OneTimeWorkRequestBuilder<UploadWorker>()
                 .setConstraints(
-                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setInputData(workDataOf(SUPABASE_API_URL to url, SUPABASE_API_KEY to key))
-                .addTag(TAG)
-                .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE, ExistingWorkPolicy.REPLACE, request)
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED).build()
+                ).addTag("$TAG-once").build()
+            WorkManager.getInstance(context).enqueue(once)
         }
-        // Define function to cancel data
+
+        // Schedule periodic send to Supabase
+        fun schedulePeriodic(context: Context){
+            val constraint = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED).build()
+            val periodic = PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(constraint).setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag(TAG).build()
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                UNIQUE,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                periodic
+            )
+        }
+
+        // Define function to cancel periodic schedule
         fun cancel(context: Context){
             WorkManager.getInstance(context).cancelUniqueWork(UNIQUE)
         }
-        // Define private function to schedule next data
-        private fun scheduleNext(context: Context, url: String, key: String) = scheduleForFiveMins(context, url, key)
-        private const val UNIQUE = "upload_5min_unique"
-        private const val TAG = "upload_5min"
     }
 }

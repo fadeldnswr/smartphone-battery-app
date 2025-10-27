@@ -18,7 +18,9 @@ object SupabaseProvider {
                 supabaseKey = context.getString(R.string.SUPABASE_API_KEY)
             ) {
                 install(Postgrest){ defaultSchema = "public" }
-                install(Auth)
+                install(Auth) {
+                    alwaysAutoRefresh = true
+                }
                 install(Realtime)
             }.also {
                 instance = it
