@@ -48,9 +48,17 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
             "rx_total_bytes":${network.rxBytes},
             "tx_total_bytes":${network.txBytes},
             "batt_voltage_mv":${battery.voltageMv ?: "null"},
-            "batt_current_ua":${battery.currentMa?.let { (it*1000).toLong() } ?: "null"},
-            "batt_temp_dc":${battery.temperatureC?.let { (it*10).toInt() } ?: "null"},
-            "thermal_status":null,
+            "batt_current_ma":${battery.currentMa ?: "null"},
+            "batt_temp_c":${battery.temperatureC ?: "null"},
+            "charging_status": ${battery.isCharging ?: "null"},
+            "battery_health": ${battery.health ?: "null"},
+            "cycle_count": ${battery.cycleCount ?: "null"},
+            "battery_level": ${battery.batteryLevel ?: "null"},
+            "charge_counter": ${battery.chargeCounter ?: "null"},
+            "energy_counter": ${battery.energyCounter ?: "null"},
+            "battery_capacity": ${battery.batteryCapacity ?: "null"},
+            "current_avg_ua"" ${battery.currentAvgUa ?: "null"},
+            ""
             "fg_pkg":${if (fgApp != null) "\"$fgApp\"" else "null"}
           }
         """.trimIndent()

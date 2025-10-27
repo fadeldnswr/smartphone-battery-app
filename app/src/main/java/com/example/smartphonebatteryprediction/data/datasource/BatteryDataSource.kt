@@ -25,11 +25,7 @@ class BatteryDataSource(private val context: Context) {
         // Read battery status
         val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
         val plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)
-        val isCharging = when(status){
-            BatteryManager.BATTERY_STATUS_CHARGING -> true
-            BatteryManager.BATTERY_STATUS_DISCHARGING -> true
-            else -> false
-        }
+        val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
 
         // Read battery charging source
         val chargeSource = when(plugged){
@@ -51,13 +47,47 @@ class BatteryDataSource(private val context: Context) {
             else -> "UNKNOWN"
         }
 
+        // Read battery level property
+        val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        val levelPct = if(level != null && scale != null && level > 0 && scale > 0)
+            (level * 100 / scale) else null
+
+        // Read average current
+        val currentAvgUa = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_AVERAGE)
+            .takeIf { it != Long.MIN_VALUE }
+
+        // Read cycle count for Android 14+
+        val cyclesCount = if (android.os.Build.VERSION.SDK_INT >= 34) {
+            intent?.getIntExtra(BatteryManager.EXTRA_CYCLE_COUNT, -1)?.takeIf { it >= 0 }
+        } else null
+
+        // Read battery charge counter
+        val chargeCounterUah = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+            .takeIf { it != Int.MIN_VALUE }
+
+        // Read battery energy counter
+        val energyNwh = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_ENERGY_COUNTER)
+            .takeIf { it != Long.MIN_VALUE }
+
+        // Read battery capacity
+        val capacityPct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            .takeIf { it in 0..100 }
+
+
         return com.example.smartphonebatteryprediction.domain.model.BatteryMetrics(
             voltageMv = voltage,
             currentMa = currentMa,
             temperatureC = tempCelcius,
             isCharging = isCharging,
             chargeSource = chargeSource,
-            health = health
+            health = health,
+            cycleCount = cyclesCount,
+            batteryLevel = levelPct,
+            currentAvgUa = currentAvgUa,
+            chargeCounter = chargeCounterUah,
+            energyCounter = energyNwh,
+            batteryCapacity = capacityPct
         )
     }
 }
