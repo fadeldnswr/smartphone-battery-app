@@ -91,7 +91,7 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
         fun schedulePeriodic(context: Context){
             val constraint = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED).build()
-            val periodic = PeriodicWorkRequestBuilder<UploadWorker>(10, TimeUnit.MINUTES)
+            val periodic = PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(constraint).setBackoffCriteria(
                     BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG).build()
