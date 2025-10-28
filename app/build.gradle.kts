@@ -73,5 +73,4 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:realtime-kt")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("io.github.jan-tennert.supabase:gotrue-kt")
 }

@@ -17,10 +17,12 @@
 
     <application
         android:allowBackup="true"
-        android:label="Metrics Demo"
+        android:label="Device Analytics"
         android:supportsRtl="true">
         <activity android:name="com.example.smartphonebatteryprediction.presentation.MainActivity"
-            android:exported="true">
+            android:exported="false" />
+        <activity android:name=".presentation.ui.LoginActivity"
+            android:exported="true" >
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

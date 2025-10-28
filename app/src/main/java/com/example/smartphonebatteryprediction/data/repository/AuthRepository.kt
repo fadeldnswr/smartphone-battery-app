@@ -25,11 +25,12 @@ class AuthRepository(private val ctx: Context) {
         }
     }
 
+    fun currentUser(): UserInfo? = sb.auth.currentUserOrNull()
+    fun currentUserIdOrNull(): String? = sb.auth.currentUserOrNull()?.id
+
     // Define sign out function
     suspend fun signOut(){
         sb.auth.signOut()
         SupabaseProvider.reset()
     }
-    fun currentUserOrNull(): UserInfo? = sb.auth.currentUserOrNull()
-    fun currentUserIdOrNull(): String? = sb.auth.currentUserOrNull()?.id
 }
