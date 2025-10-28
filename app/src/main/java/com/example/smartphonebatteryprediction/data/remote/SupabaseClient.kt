@@ -17,6 +17,7 @@ object SupabaseProvider {
                 supabaseUrl = context.getString(R.string.SUPABASE_API_URL),
                 supabaseKey = context.getString(R.string.SUPABASE_API_KEY)
             ) {
+                httpEngine = io.ktor.client.engine.okhttp.OkHttp.create()
                 install(Postgrest){ defaultSchema = "public" }
                 install(Auth) {
                     alwaysAutoRefresh = true

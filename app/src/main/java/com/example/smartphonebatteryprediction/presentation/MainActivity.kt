@@ -17,10 +17,8 @@ import com.example.smartphonebatteryprediction.di.ServiceLocator
 import com.example.smartphonebatteryprediction.presentation.ui.DashboardScreen
 import com.example.smartphonebatteryprediction.presentation.viewmodel.DashboardViewModel
 import com.example.smartphonebatteryprediction.workers.UploadWorker
-import com.example.smartphonebatteryprediction.R
 import com.example.smartphonebatteryprediction.data.repository.AuthRepository
 import com.example.smartphonebatteryprediction.presentation.ui.LoginActivity
-import okhttp3.Headers
 
 
 class MainActivity: ComponentActivity(){

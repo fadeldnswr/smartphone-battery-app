@@ -52,11 +52,11 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
             "batt_temp_c":${battery.temperatureC ?: "null"},
             "charging_status": ${battery.isCharging ?: "null"},
             "battery_health": ${battery.health ?: "null"},
-            "cycle_count": ${battery.cycleCount ?: "null"},
+            "cycles_count": ${battery.cycleCount ?: "null"},
             "battery_level": ${battery.batteryLevel ?: "null"},
-            "charge_counter": ${battery.chargeCounter ?: "null"},
-            "energy_counter": ${battery.energyCounter ?: "null"},
-            "battery_capacity": ${battery.batteryCapacity ?: "null"},
+            "charge_counter_uah": ${battery.chargeCounter ?: "null"},
+            "energy_nwh": ${battery.energyCounter ?: "null"},
+            "battery_capacity_pct": ${battery.batteryCapacity ?: "null"},
             "current_avg_ua"" ${battery.currentAvgUa ?: "null"},
             ""
             "fg_pkg":${if (fgApp != null) "\"$fgApp\"" else "null"}
@@ -91,7 +91,7 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
         fun schedulePeriodic(context: Context){
             val constraint = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED).build()
-            val periodic = PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
+            val periodic = PeriodicWorkRequestBuilder<UploadWorker>(10, TimeUnit.MINUTES)
                 .setConstraints(constraint).setBackoffCriteria(
                     BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG).build()
