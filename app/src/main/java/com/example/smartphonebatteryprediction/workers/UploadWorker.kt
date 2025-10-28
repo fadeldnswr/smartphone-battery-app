@@ -1,33 +1,47 @@
 package com.example.smartphonebatteryprediction.workers
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import java.util.concurrent.TimeUnit
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.work.*
 import com.example.smartphonebatteryprediction.di.ServiceLocator
 import java.time.Instant
-import com.example.smartphonebatteryprediction.R
 import com.example.smartphonebatteryprediction.data.remote.SupabaseProvider
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
-import java.time.Period
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWorker(appContext, params) {
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val channelId = "sync_metrics"
+        val nm = NotificationManagerCompat.from(applicationContext)
+        if (Build.VERSION.SDK_INT >= 26) {
+            val ch = NotificationChannel(channelId, "Device Analytics Sync",
+                NotificationManager.IMPORTANCE_MIN)
+            nm.createNotificationChannel(ch)
+        }
+        val notif = NotificationCompat.Builder(applicationContext, channelId)
+            .setContentTitle("Syncing analytics")
+            .setOngoing(false)
+            .setSilent(true)
+            .build()
+        return ForegroundInfo(42, notif,
+            if (Build.VERSION.SDK_INT >= 34)
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
+    }
     override suspend fun doWork(): Result {
         Log.i("UploadWorker", "doWork() started")
-        val supabase = SupabaseProvider.get(applicationContext)
-
-        val hasRadio = (applicationContext as Context).let {
-            val fine = androidx.core.content.ContextCompat.checkSelfPermission(
-                it, android.Manifest.permission.ACCESS_FINE_LOCATION
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-            val nearby = if (android.os.Build.VERSION.SDK_INT >= 33)
-                androidx.core.content.ContextCompat.checkSelfPermission(
-                    it, android.Manifest.permission.NEARBY_WIFI_DEVICES
-                ) == android.content.pm.PackageManager.PERMISSION_GRANTED else false
-            fine || nearby
-        }
+        setForeground(getForegroundInfo())
 
         // Define repository for metrics logger
         val repo = ServiceLocator.provideRepository(appContext = applicationContext)
@@ -37,40 +51,64 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
         val deviceId = Build.MODEL + "-" +
                 (Settings.Secure.getString(applicationContext.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown")
         val ts = Instant.now().toString()
+        val currentUa: Long? = battery.currentMa?.let { (it * 1000).toLong() }
+
+        // Helper untuk nullable put
+        fun JsonObjectBuilder.putStringN(k: String, v: String?) =
+            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+        fun JsonObjectBuilder.putBooleanN(k: String, v: Boolean?) =
+            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+        fun JsonObjectBuilder.putIntN(k: String, v: Int?) =
+            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+        fun JsonObjectBuilder.putLongN(k: String, v: Long?) =
+            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+        fun JsonObjectBuilder.putDoubleN(k: String, v: Double?) =
+            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
 
         // Define JSON structure to insert data to Supabase
-        val json = """
-          {
-            "device_id":"$deviceId",
-            "ts_utc":"$ts",
-            "net_type":"${network.networkTypes}",
-            "channel_quality":${network.radioRssiDbm ?: "null"},
-            "rx_total_bytes":${network.rxBytes},
-            "tx_total_bytes":${network.txBytes},
-            "batt_voltage_mv":${battery.voltageMv ?: "null"},
-            "batt_current_ma":${battery.currentMa ?: "null"},
-            "batt_temp_c":${battery.temperatureC ?: "null"},
-            "charging_status": ${battery.isCharging ?: "null"},
-            "battery_health": ${battery.health ?: "null"},
-            "cycles_count": ${battery.cycleCount ?: "null"},
-            "battery_level": ${battery.batteryLevel ?: "null"},
-            "charge_counter_uah": ${battery.chargeCounter ?: "null"},
-            "energy_nwh": ${battery.energyCounter ?: "null"},
-            "battery_capacity_pct": ${battery.batteryCapacity ?: "null"},
-            "current_avg_ua"" ${battery.currentAvgUa ?: "null"},
-            ""
-            "fg_pkg":${if (fgApp != null) "\"$fgApp\"" else "null"}
-          }
-        """.trimIndent()
+        val payload = buildJsonObject {
+            putStringN("device_id", deviceId)
+            putStringN("ts_utc", ts)
+            putStringN("net_type", network.networkTypes)
+            putIntN("channel_quality", network.radioRssiDbm)
+            putLongN("rx_total_bytes", network.rxBytes)
+            putLongN("tx_total_bytes", network.txBytes)
+            putIntN("batt_voltage_mv", battery.voltageMv)              // Int mV
+            putLongN("batt_current_ua", currentUa)                    // Long µA
+            putDoubleN("batt_temp_c", battery.temperatureC)           // Double °C
+            putBooleanN("is_charging", battery.isCharging)        // Boolean
+            putStringN("battery_health", battery.health)              // String
+            putIntN("battery_level", battery.batteryLevel)            // 0..100
+            putIntN("cycles_count", battery.cycleCount)                // Android 14+
+            putIntN("charge_counter_uah", battery.chargeCounter)      // int (uAh)
+            putLongN("energy_nwh", battery.energyCounter)     // long (nWh)
+            putIntN("battery_capacity_pct", battery.batteryCapacity?.toInt())
+            putLongN("current_avg_ua", battery.currentAvgUa)          // long (µA)
+            putStringN("charge_source", battery.chargeSource)         // "AC"/"USB"/"WIRELESS"/"NONE"
 
-        // Insert data to Supabase
-        val sendData = supabase.postgrest["raw_metrics"].insert(json)
-        Log.i("UploadWorker", "POST raw_smartphone_data -> success=$sendData")
+            putStringN("fg_pkg", fgApp)
+        }
 
-        // Create for 5 minutes interval
-        runOnceNow(applicationContext)
-        Log.i("UploadWorker", "doWork() finished: success=$sendData")
-        return Result.success()
+        // Check client session before upload
+        val client = SupabaseProvider.get(applicationContext)
+        val session = client.auth.currentSessionOrNull()
+        if (session == null){
+            Log.w("UploadWorker", "No valid session, skipping upload")
+            return Result.retry()
+        }
+
+        return try {
+            client.postgrest["raw_metrics"].insert(payload)
+            Log.i(TAG, "POST raw_metrics -> success")
+            Result.success()
+        } catch (e: Throwable){
+            Log.e(TAG, "POST raw_metrics failed: ${e.message}", e)
+            Result.retry()
+        }
     }
 
     companion object {
@@ -91,7 +129,10 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
         fun schedulePeriodic(context: Context){
             val constraint = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED).build()
-            val periodic = PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
+            val periodic = PeriodicWorkRequestBuilder<UploadWorker>(
+                15, TimeUnit.MINUTES,
+                5, TimeUnit.MINUTES
+            )
                 .setConstraints(constraint).setBackoffCriteria(
                     BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG).build()

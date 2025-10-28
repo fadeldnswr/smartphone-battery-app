@@ -21,6 +21,8 @@ object SupabaseProvider {
                 install(Postgrest){ defaultSchema = "public" }
                 install(Auth) {
                     alwaysAutoRefresh = true
+                    autoLoadFromStorage = true
+                    autoSaveToStorage = true
                 }
                 install(Realtime)
             }.also {
