@@ -3,6 +3,7 @@ package com.example.smartphonebatteryprediction.presentation.ui
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -24,6 +25,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.smartphonebatteryprediction.data.repository.AuthRepository
 import com.example.smartphonebatteryprediction.presentation.MainActivity
+import com.example.smartphonebatteryprediction.workers.UploadWorker
 import kotlinx.coroutines.launch
 
 class LoginActivity: ComponentActivity() {
@@ -35,12 +37,10 @@ class LoginActivity: ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Redirect if logged in
-        vm.maybeRedirectToMain(
-            onAlreadyLoggedIn = {
-                startActivity(Intent(this, MainActivity::class.java))
-                finish()
-            }
-        )
+        if(vm.isAlreadyLoggedIn()){
+            navigateToMain()
+            return
+        }
 
         setContent {
             MaterialTheme {
@@ -49,9 +49,14 @@ class LoginActivity: ComponentActivity() {
                         isLoading = vm.isLoading,
                         error = vm.error,
                         onSubmit = { email, pass, isSignup ->
-                            vm.auth(email, pass, isSignup) {
-                                startActivity(Intent(this, MainActivity::class.java))
-                                finish()
+                            vm.auth(email, pass, isSignup) { result ->
+                                if (isSignup) {
+                                    if(result.ok) {
+                                        vm.error = "Account created successfully! Please Login"
+                                    }
+                                    return@auth
+                                }
+                                if(result.ok) navigateToMain() else vm.error = "Error has occurred"
                             }
                         },
                         onDismissError = { vm.error = null }
@@ -60,6 +65,19 @@ class LoginActivity: ComponentActivity() {
             }
         }
     }
+
+    private fun navigateToMain(){
+        UploadWorker.schedulePeriodic(applicationContext)
+        Log.i("Login Activity", "Work manager scheduled, navigating to main activity")
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+
+        startActivity(intent)
+        finish()
+        Log.i("LoginActivity", "Navigation complete, LoginActivity finishing")
+    }
 }
 
 class LoginViewModel(private val repo: AuthRepository): ViewModel(){
@@ -67,20 +85,25 @@ class LoginViewModel(private val repo: AuthRepository): ViewModel(){
     var error by mutableStateOf<String?>(null)
 
     // Define function to redirect to Main
-    fun maybeRedirectToMain(onAlreadyLoggedIn: () -> Unit){
-        if (repo.currentUser() != null) onAlreadyLoggedIn()
+    fun isAlreadyLoggedIn(): Boolean{
+        return repo.currentUser() != null
     }
-
     // Define auth function
-    fun auth(email:String, pass:String, signUp:Boolean, onSuccess: () -> Unit){
+    fun auth(email:String, pass:String, signUp:Boolean, onResult: (AuthRepository.AuthResult) -> Unit){
         viewModelScope.launch {
             try {
                 isLoading = true
                 error = null
-                if (signUp) repo.signUp(email = email, password = pass) else repo.signIn(email = email, password = pass)
-                onSuccess()
+                val res = if (signUp) repo.signUp(email = email, password = pass) else repo.signIn(email = email, password = pass)
+                if (!res.ok) {
+                    error = res.message ?: "Authentication Failed"
+                } else if(!signUp) {
+                    kotlinx.coroutines.delay(300)
+                }
+                onResult(res)
             } catch (e: Exception){
                 error = e.message ?: "Authentication Failed"
+                onResult(AuthRepository.AuthResult(false, error))
             } finally {
                 isLoading = false
             }

@@ -2,6 +2,7 @@ package com.example.smartphonebatteryprediction.workers
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.pm.ServiceInfo
 import java.util.concurrent.TimeUnit
@@ -20,28 +21,18 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import com.example.smartphonebatteryprediction.R
+import java.net.HttpURLConnection
+import java.net.URL
 
 class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWorker(appContext, params) {
-    override suspend fun getForegroundInfo(): ForegroundInfo {
-        val channelId = "sync_metrics"
-        val nm = NotificationManagerCompat.from(applicationContext)
-        if (Build.VERSION.SDK_INT >= 26) {
-            val ch = NotificationChannel(channelId, "Device Analytics Sync",
-                NotificationManager.IMPORTANCE_MIN)
-            nm.createNotificationChannel(ch)
-        }
-        val notif = NotificationCompat.Builder(applicationContext, channelId)
-            .setContentTitle("Syncing analytics")
-            .setOngoing(false)
-            .setSilent(true)
-            .build()
-        return ForegroundInfo(42, notif,
-            if (Build.VERSION.SDK_INT >= 34)
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
-    }
     override suspend fun doWork(): Result {
         Log.i("UploadWorker", "doWork() started")
-        setForeground(getForegroundInfo())
+        try {
+            setForeground(createForegroundInfo())
+        } catch (e: Exception){
+            Log.w(TAG, "Could not set foreground: ${e.message}")
+        }
 
         // Define repository for metrics logger
         val repo = ServiceLocator.provideRepository(appContext = applicationContext)
@@ -53,21 +44,8 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
         val ts = Instant.now().toString()
         val currentUa: Long? = battery.currentMa?.let { (it * 1000).toLong() }
 
-        // Helper untuk nullable put
-        fun JsonObjectBuilder.putStringN(k: String, v: String?) =
-            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
-
-        fun JsonObjectBuilder.putBooleanN(k: String, v: Boolean?) =
-            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
-
-        fun JsonObjectBuilder.putIntN(k: String, v: Int?) =
-            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
-
-        fun JsonObjectBuilder.putLongN(k: String, v: Long?) =
-            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
-
-        fun JsonObjectBuilder.putDoubleN(k: String, v: Double?) =
-            if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+        val supabase = SupabaseProvider.get(applicationContext)
+        val user = supabase.auth.currentUserOrNull()
 
         // Define JSON structure to insert data to Supabase
         val payload = buildJsonObject {
@@ -93,59 +71,168 @@ class UploadWorker(appContext: Context, params: WorkerParameters): CoroutineWork
             putStringN("fg_pkg", fgApp)
         }
 
-        // Check client session before upload
-        val client = SupabaseProvider.get(applicationContext)
-        val session = client.auth.currentSessionOrNull()
-        if (session == null){
-            Log.w("UploadWorker", "No valid session, skipping upload")
-            return Result.retry()
+        if(tags.contains("${TAG}_once")){
+            try {
+                setForeground(createForegroundInfo())
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not set foreground (not critical")
+            }
         }
 
-        return try {
-            client.postgrest["raw_metrics"].insert(payload)
-            Log.i(TAG, "POST raw_metrics -> success")
-            Result.success()
-        } catch (e: Throwable){
-            Log.e(TAG, "POST raw_metrics failed: ${e.message}", e)
-            Result.retry()
+        val sentToApi = runCatching {
+            sendToApi(payload.toString())
+        }.onFailure { Log.w(TAG, "Send to API failed: ${it.message}") }.isSuccess
+
+        if(!sentToApi){
+            val client = SupabaseProvider.get(applicationContext)
+            // Checking session first
+            val session = client.auth.currentSessionOrNull()
+            // Check if session is null
+            if(session == null){
+                runCatching { client.auth.currentSessionOrNull() }
+                Log.w(TAG, "No valid session, skipping upload")
+                return Result.retry()
+            }
+            return try {
+                client.postgrest["raw_metrics"].insert(payload)
+                Log.i(TAG, "POST raw_metrics -> success")
+                Result.success()
+            } catch (e: Throwable){
+                Log.e(TAG, "POST raw_metrics failed: ${e.message}", e)
+                if(runAttemptCount < 5) {
+                    Result.retry()
+                } else {
+                    Result.failure()
+                }
+
+            }
+        }
+        return Result.success()
+    }
+
+    private fun sendToApi(body: String){
+        val url = URL("http://192.168.1.8:8000/data-retrieval/raw-metrics")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer 123455678")
+        conn.doOutput = true
+        conn.outputStream.use {
+            os -> os.write(body.toByteArray())
+        }
+        val code = conn.responseCode
+        if(code !in 200..299){
+            throw IllegalStateException("API returned $code")
+        }
+    }
+
+    private fun createForegroundInfo(): ForegroundInfo {
+        createNotificationChannel()
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setContentTitle("Device Monitoring")
+            .setContentText("Syncing device metrics..")
+            .setSmallIcon(R.drawable.ic_stats_upload)
+            .setOngoing(true)
+            .build()
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun createNotificationChannel(){
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O){
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Device Monitoring Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Notification for device data sync"
+                setShowBadge(false)
+            }
+            val manager = applicationContext.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
         }
     }
 
     companion object {
-        private const val UNIQUE = "upload_periodic_unique"
-        private const val TAG = "upload_periodic"
+        private const val TAG = "UploadWorker"
+        private const val UNIQUE_WORK_NAME = "device_upload_periodic"
+        private const val CHANNEL_ID = "device_monitoring_channel"
+        private const val NOTIFICATION_ID = 1001
 
         // Run work manager to send data to Supabase
         fun runOnceNow(context: Context){
-            val once = OneTimeWorkRequestBuilder<UploadWorker>()
-                .setConstraints(
-                    Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED).build()
-                ).addTag("$TAG-once").build()
-            WorkManager.getInstance(context).enqueue(once)
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+            val oneTimeWork = OneTimeWorkRequestBuilder<UploadWorker>()
+                .setConstraints(constraints)
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .addTag("${TAG}_once")
+                .build()
+            WorkManager.getInstance(context).enqueue(oneTimeWork)
+            Log.i(TAG, "One time upload triggered")
+        }
+
+        fun cancelAll(context: Context){
+            WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_WORK_NAME)
+            Log.i(TAG, "All periodic work upload cancelled")
         }
 
         // Schedule periodic send to Supabase
         fun schedulePeriodic(context: Context){
             val constraint = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED).build()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiresBatteryNotLow(false).build()
             val periodic = PeriodicWorkRequestBuilder<UploadWorker>(
                 15, TimeUnit.MINUTES,
                 5, TimeUnit.MINUTES
             )
                 .setConstraints(constraint).setBackoffCriteria(
-                    BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                    BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
                 .addTag(TAG).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                UNIQUE,
-                ExistingPeriodicWorkPolicy.UPDATE,
+                UNIQUE_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
                 periodic
             )
+            Log.i(TAG, "Periodic upload scheduled for 15 minutes")
         }
 
-        // Define function to cancel periodic schedule
-        fun cancel(context: Context){
-            WorkManager.getInstance(context).cancelUniqueWork(UNIQUE)
+        fun isScheduled(context: Context, callback: (Boolean) -> Unit){
+            WorkManager.getInstance(context)
+                .getWorkInfosForUniqueWork(UNIQUE_WORK_NAME)
+                .addListener({
+                    val workInfos = WorkManager.getInstance(context)
+                        .getWorkInfosForUniqueWork(UNIQUE_WORK_NAME).get()
+                    val isScheduled = workInfos.any {
+                        it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING
+                    }
+                    callback(isScheduled)
+                }, {it.run()})
         }
     }
 }
+
+// Helper untuk nullable put
+private fun JsonObjectBuilder.putStringN(k: String, v: String?) =
+    if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+private fun JsonObjectBuilder.putBooleanN(k: String, v: Boolean?) =
+    if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+private fun JsonObjectBuilder.putIntN(k: String, v: Int?) =
+    if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+private fun JsonObjectBuilder.putLongN(k: String, v: Long?) =
+    if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))
+
+private fun JsonObjectBuilder.putDoubleN(k: String, v: Double?) =
+    if (v == null) put(k, JsonNull) else put(k, JsonPrimitive(v))

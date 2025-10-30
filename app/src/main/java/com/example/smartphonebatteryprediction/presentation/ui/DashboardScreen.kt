@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.example.smartphonebatteryprediction.presentation.viewmodel.UIMetrics
 
 @Composable
-fun DashboardScreen(ui: UIMetrics, onStart: () -> Unit, onStop: () -> Unit){
+fun DashboardScreen(ui: UIMetrics, onStart: () -> Unit, onStop: () -> Unit, onUpload: () -> Unit){
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -59,6 +59,7 @@ fun DashboardScreen(ui: UIMetrics, onStart: () -> Unit, onStop: () -> Unit){
             Spacer(Modifier.height(24.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Button(onClick = onStart) { Text("Start") }
+                Button(onClick = onUpload) { Text("Upload") }
                 OutlinedButton(onClick = onStop) { Text("Stop") }
             }
         }
